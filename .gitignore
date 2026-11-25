@@ -2,8 +2,8 @@ node_modules/
 .env
 .env.*
 !.env.example
-data/*.db
-data/*.db-*
+data/*
+!data/.gitkeep
 *.db
 *.db-*
 *.log
