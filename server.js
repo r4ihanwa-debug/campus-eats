@@ -1,6 +1,7 @@
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
+const { initDb, closeDb } = require('./src/db');
 const { handle, tick, HttpError } = require('./src/api');
 
 const PORT = Number(process.env.PORT) || 3000;
@@ -47,8 +48,18 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
-if (require.main === module) {
+async function start() {
+  await initDb();
   setInterval(tick, 2000);
-  server.listen(PORT, () => console.log(`Campus Eats berjalan di http://localhost:${PORT}`));
+  await new Promise(resolve => server.listen(PORT, resolve));
+  console.log(`Campus Eats berjalan di http://localhost:${PORT}`);
 }
-module.exports = server;
+
+if (require.main === module) {
+  start().catch(err => {
+    console.error('Gagal menjalankan server:', err);
+    process.exit(1);
+  });
+}
+
+module.exports = { server, initDb, closeDb };

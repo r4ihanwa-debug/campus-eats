@@ -1,9 +1,15 @@
-// Tes alur end-to-end (tanpa dependensi): node tests/flow.test.js
+// Tes alur end-to-end: node tests/flow.test.js
 const os = require('os'), path = require('path'), fs = require('fs'), assert = require('assert');
 const tmp = path.join(os.tmpdir(), `ce-test-${Date.now()}.db`);
 process.env.DB_FILE = tmp;
-const server = require('../server');
-const api = require('../src/api');
+process.env.NODE_ENV = 'test';
+process.env.SEED_ADMIN_PASSWORD = 'TestAdminPass!1';
+process.env.SEED_CUSTOMER_PASSWORD = 'TestCustomerPass!1';
+process.env.SEED_COURIER_PASSWORD = 'TestCourierPass!1';
+process.env.SEED_MERCHANT_PASSWORD = 'TestMerchantPass!1';
+
+const { server, initDb, closeDb } = require('../server');
+const { q } = require('../src/db');
 
 const jar = {};
 async function call(who, method, url, body) {
@@ -21,11 +27,23 @@ const fail = async (code, ...a) => { const r = await call(...a); assert.strictEq
 let base;
 
 (async () => {
+  await initDb();
+  // Verifikasi seeder idempoten: panggil ulang tidak menduplikasi user
+  const userCountBefore = (await q.get('SELECT COUNT(*) AS c FROM users')).c;
+  await initDb();
+  const userCountAfter = (await q.get('SELECT COUNT(*) AS c FROM users')).c;
+  assert.strictEqual(userCountBefore, userCountAfter, 'seeding tidak boleh menduplikasi user');
+  assert.strictEqual(Number(userCountBefore), 5);
+  console.log('✓ migrasi & seeding idempoten (5 akun bcrypt)');
+
   await new Promise(r => server.listen(0, r));
   base = 'http://localhost:' + server.address().port;
   const login = (who, u, p) => ok(who, 'POST', '/api/auth/login', { username: u, password: p });
-  await login('abyan', 'abyan', 'Abyan123!'); await login('agus', 'agus', 'Agus123!'); await login('seno', 'seno', 'Seno123!');
-  await login('lore', 'kantinlore', 'Lore123!'); await login('admin', 'admin', 'Admin123!');
+  await login('abyan', 'abyan', process.env.SEED_CUSTOMER_PASSWORD);
+  await login('agus', 'agus', process.env.SEED_COURIER_PASSWORD);
+  await login('seno', 'seno', process.env.SEED_COURIER_PASSWORD);
+  await login('lore', 'kantinlore', process.env.SEED_MERCHANT_PASSWORD);
+  await login('admin', 'admin', process.env.SEED_ADMIN_PASSWORD);
   await fail(401, 'x', 'POST', '/api/auth/login', { username: 'abyan', password: 'salah' });
   console.log('✓ login 5 akun demo');
 
@@ -36,7 +54,7 @@ let base;
 
   const menu = (await ok('abyan', 'GET', '/api/menu')).products;
   const box = menu.find(p => p.name.startsWith('Rice Box')), geprek = menu.find(p => p.name === 'Ayam Geprek'), mie = menu.find(p => p.name === 'Mie Ayam');
-  await fail(400, 'abyan', 'POST', '/api/cart/items', { product_id: box.id, qty: 1, options: { Ukuran: 'Regular' } }); // saus wajib
+  await fail(400, 'abyan', 'POST', '/api/cart/items', { product_id: box.id, qty: 1, options: { Ukuran: 'Regular' } });
   let cart = await ok('abyan', 'POST', '/api/cart/items', { product_id: box.id, qty: 2, options: { Ukuran: 'Large', Tambahan: 'Tambah ayam', Saus: 'Lava' } });
   assert.strictEqual(cart.subtotal, 2 * (15000 + 5000));
   cart = await ok('abyan', 'POST', '/api/cart/items', { product_id: geprek.id, qty: 1, options: { 'Bagian Ayam': 'Dada', Sambal: 'Sambal Matah' } });
@@ -48,7 +66,9 @@ let base;
 
   const stock0 = (await ok('lore', 'GET', '/api/m/products')).products.find(p => p.id === geprek.id).stock;
   await fail(400, 'abyan', 'POST', '/api/orders', { floor: 5, room: 105, recipient: '' });
-  await fail(400, 'abyan', 'POST', '/api/vouchers/check', { code: 'GEPREK3K', floor: 5 }).catch(() => {});
+  await fail(400, 'abyan', 'POST', '/api/vouchers/check', { code: 'KODEPALSU', floor: 5 });
+  const vGeprek = await ok('abyan', 'POST', '/api/vouchers/check', { code: 'GEPREK3K', floor: 5 });
+  assert.strictEqual(vGeprek.discount, 3000);
   const v = await ok('abyan', 'POST', '/api/vouchers/check', { code: 'GRATISONGKIR', floor: 9 });
   assert.strictEqual(v.discount, 4000);
   const created = await ok('abyan', 'POST', '/api/orders', { floor: 9, room: 120, recipient: 'Abyan', voucher: 'GRATISONGKIR' });
@@ -85,11 +105,11 @@ let base;
   assert.strictEqual(d.status, 'KURIR_DITEMUKAN');
   console.log('✓ pencarian kurir, tolak -> kurir lain, satu pesanan satu kurir');
 
-  await fail(409, 'abyan', 'POST', `/api/orders/${o2.id}/complete`).catch(() => {});
-  await fail(409, second, 'POST', `/api/courier/orders/${o2.id}/pickup`); // makanan belum siap
+  await fail(404, 'abyan', 'POST', `/api/orders/${o2.id}/complete`);
+  await fail(409, second, 'POST', `/api/courier/orders/${o2.id}/pickup`);
   await ok('lore', 'POST', `/api/m/orders/${o2.id}/accept`);
   await ok('lore', 'POST', `/api/m/orders/${o2.id}/prepare`);
-  await fail(409, 'abyan', 'POST', `/api/orders/${o2.id}/cancel`); // sudah disiapkan
+  await fail(409, 'abyan', 'POST', `/api/orders/${o2.id}/cancel`);
   await ok('lore', 'POST', `/api/m/orders/${o2.id}/ready`);
   await ok(second, 'POST', `/api/courier/orders/${o2.id}/arrived`);
   await ok(second, 'POST', `/api/courier/orders/${o2.id}/pickup`);
@@ -119,7 +139,8 @@ let base;
   console.log('✓ pesanan offline memakai stok yang sama');
 
   // tidak ada kurir
-  await ok('agus', 'POST', '/api/courier/online', { online: false }); await ok('seno', 'POST', '/api/courier/online', { online: false });
+  await ok('agus', 'POST', '/api/courier/online', { online: false });
+  await ok('seno', 'POST', '/api/courier/online', { online: false });
   await ok('abyan', 'POST', '/api/cart/items', { product_id: mie.id, qty: 1, options: { 'Pakai Sawi': 'Ya', 'Pakai Ayam': 'Ya', 'Pakai Daun Bawang': 'Ya' } });
   const o4 = (await ok('abyan', 'POST', '/api/orders', { floor: 1, room: 101, recipient: 'Abyan' })).order;
   await ok('abyan', 'POST', `/api/orders/${o4.id}/pay`);
@@ -128,13 +149,23 @@ let base;
   console.log('✓ tidak ada kurir aktif -> info ke pembeli, bisa batal + refund');
 
   const ov = await ok('admin', 'GET', '/api/admin/overview');
-  assert.ok(ov.orders >= 4 && ov.gross === 18000 + 0 + 0 || ov.gross >= 18000);
+  assert.ok(ov.orders >= 4 && ov.gross >= 18000);
   const rep = await ok('lore', 'GET', '/api/m/report');
   assert.ok(rep.total >= 16000);
-  await ok('admin', 'POST', `/api/admin/users/${(await ok('admin', 'GET', '/api/admin/users?role=courier')).users[0].id}/active`, { active: false });
-  await fail(403, 'agus', 'POST', '/api/courier/online', { online: true }).catch(() => {});
+  const couriers = (await ok('admin', 'GET', '/api/admin/users?role=courier')).users;
+  await ok('admin', 'POST', `/api/admin/users/${couriers[0].id}/active`, { active: false });
+  await fail(401, 'agus', 'POST', '/api/courier/online', { online: true });
   console.log('✓ admin overview, laporan, nonaktifkan akun');
 
   console.log('\nSEMUA TES LULUS');
-  server.close(); fs.rmSync(tmp, { force: true }); process.exit(0);
-})().catch(e => { console.error('\n✗ GAGAL:', e.message); process.exit(1); });
+  await new Promise(r => server.close(r));
+  await closeDb();
+  for (const suffix of ['', '-wal', '-shm']) {
+    try { fs.rmSync(tmp + suffix, { force: true }); } catch {}
+  }
+  process.exit(0);
+})().catch(async e => {
+  console.error('\n✗ GAGAL:', e);
+  try { await closeDb(); } catch {}
+  process.exit(1);
+});
