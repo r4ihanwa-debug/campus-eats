@@ -1,0 +1,3 @@
+ALTER TABLE orders ADD COLUMN stage TEXT NOT NULL DEFAULT 'menunggu';
+ALTER TABLE payments ADD COLUMN expires_at INTEGER;
+ALTER TABLE payments ADD COLUMN updated_at INTEGER;

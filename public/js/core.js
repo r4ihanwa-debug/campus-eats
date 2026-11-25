@@ -6,23 +6,60 @@ const cur = { poll: null, timers: [], last: '' };
 const $ = s => document.querySelector(s);
 const rp = n => 'Rp' + Number(n || 0).toLocaleString('id-ID');
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const safeDataImg = src => typeof src === 'string' && /^data:image\/(png|jpe?g|webp|gif);base64,[A-Za-z0-9+/=]+$/.test(src) ? src : '';
 const dt = t => t ? new Date(t).toLocaleString('id-ID', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : '-';
 const initials = n => String(n || '?').trim().split(/\s+/).slice(0, 2).map(w => w[0]).join('').toUpperCase();
 
 async function api(url, method = 'GET', body) {
-  const r = await fetch(url, { method, headers: body ? { 'Content-Type': 'application/json' } : {}, body: body ? JSON.stringify(body) : undefined, credentials: 'same-origin' });
+  const r = await fetch(url, {
+    method,
+    headers: body !== undefined ? { 'Content-Type': 'application/json' } : {},
+    body: body !== undefined ? JSON.stringify(body) : undefined,
+    credentials: 'same-origin',
+  });
   const d = await r.json().catch(() => ({}));
   if (!r.ok) {
     if (r.status === 401 && S.user) { S.user = null; stopPolling(); location.hash = '#/login'; }
-    throw new Error(d.error || 'Terjadi kesalahan');
+    const msg = (d && typeof d.error === 'object' ? d.error.message : d?.error) || 'Terjadi kesalahan';
+    const err = new Error(msg);
+    if (d && typeof d.error === 'object') {
+      err.code = d.error.code;
+      err.fields = d.error.fields || null;
+    }
+    throw err;
   }
   return d;
 }
+
 /* aksi dengan penanganan error + toast */
 async function act(fn, okMsg) {
-  try { const r = await fn(); if (okMsg) toast(okMsg, 'ok'); return r; }
-  catch (e) { toast(e.message, 'err'); return null; }
+  try {
+    const r = await fn();
+    if (okMsg) toast(okMsg, 'ok');
+    return r;
+  } catch (e) {
+    toast(e.message, 'err');
+    return null;
+  }
 }
+
+/* helper loading state tombol agar tidak double-submit */
+async function withBusy(btn, fn) {
+  if (!btn) return fn();
+  if (btn.disabled) return null;
+  btn.disabled = true;
+  btn.classList.add('is-loading');
+  try {
+    return await fn();
+  } finally {
+    if (btn.isConnected) {
+      btn.disabled = false;
+      btn.classList.remove('is-loading');
+    }
+  }
+}
+
+const alertBox = (msg, kind = 'err') => `<div class="alert ${esc(kind)}" role="alert">${esc(msg)}</div>`;
 
 /* ---------- ikon (SVG inline, gaya Lucide) ---------- */
 const P = {
@@ -60,19 +97,25 @@ const LOGO = `<div class="logo"><i><svg viewBox="0 0 24 24" fill="none" stroke-w
 /* ---------- toast & modal ---------- */
 function toast(msg, kind = '', title = '') {
   const t = document.createElement('div');
-  t.className = 'toast ' + kind; t.setAttribute('role', 'status');
+  t.className = 'toast ' + esc(kind);
+  t.setAttribute('role', 'status');
   t.innerHTML = (title ? `<b>${esc(title)}</b>` : '') + esc(msg);
   const kill = () => { t.classList.add('out'); setTimeout(() => t.remove(), 300); };
-  t.onclick = kill; $('#toasts').appendChild(t); setTimeout(kill, 4500);
+  t.onclick = kill;
+  $('#toasts').appendChild(t);
+  setTimeout(kill, 4500);
 }
+
 function modal(html, { wide = false, onclose } = {}) {
   closeModal();
   const root = $('#modal-root');
   root.innerHTML = `<div class="ov"><div class="modal ${wide ? 'wide' : ''}" role="dialog" aria-modal="true">${html}</div></div>`;
   root.firstChild.onmousedown = e => { if (e.target === root.firstChild && !onclose?.lock) { closeModal(); onclose?.(); } };
-  const f = root.querySelector('input,select,textarea'); if (f && !matchMedia('(pointer:coarse)').matches) f.focus();
+  const f = root.querySelector('input,select,textarea');
+  if (f && !matchMedia('(pointer:coarse)').matches) f.focus();
 }
 function closeModal() { $('#modal-root').innerHTML = ''; }
+
 function confirmBox(title, text, okLabel = 'Ya, lanjutkan', danger = false) {
   return new Promise(res => {
     modal(`<h2>${esc(title)}</h2><p class="mute" style="margin:8px 0 20px">${esc(text)}</p>
@@ -81,6 +124,7 @@ function confirmBox(title, text, okLabel = 'Ya, lanjutkan', danger = false) {
     $('#cb-ok').onclick = () => { closeModal(); res(true); };
   });
 }
+
 function promptBox(title, label, ph = '') {
   return new Promise(res => {
     modal(`<h2>${esc(title)}</h2><label class="f" style="margin-top:14px">${esc(label)}<input id="pb-in" maxlength="120" placeholder="${esc(ph)}"></label>
@@ -93,9 +137,10 @@ function promptBox(title, label, ph = '') {
 /* ---------- gambar makanan ---------- */
 const EMOJI = { rice: '🍱', geprek: '🍗', bakar: '🍖', mie: '🍜', default: '🍽️' };
 function art(img, cls = '') {
-  if (img && img.startsWith('data:')) return `<div class="art ${cls}"><img src="${img}" alt="" loading="lazy"></div>`;
+  const safe = safeDataImg(img);
+  if (safe) return `<div class="art ${esc(cls)}"><img src="${safe}" alt="" loading="lazy"></div>`;
   const k = EMOJI[img] ? img : 'default';
-  return `<div class="art ${k} ${cls}" role="img" aria-label="Ilustrasi makanan">${EMOJI[k]}</div>`;
+  return `<div class="art ${k} ${esc(cls)}" role="img" aria-label="Ilustrasi makanan">${EMOJI[k]}</div>`;
 }
 const skeleton = (n = 3) => `<div class="grid g3">${Array.from({ length: n }, () => '<div class="skel" style="height:220px"></div>').join('')}</div>`;
 const stars = n => `<span style="color:var(--orange)">★</span> ${Number(n || 0).toFixed(1)}`;
@@ -142,7 +187,8 @@ function shell() {
 function setActiveNav() {
   const h = location.hash.split('?')[0];
   document.querySelectorAll('.nav a,.bottom a').forEach(a => {
-    const t = a.getAttribute('href'); a.classList.toggle('on', h === t || (t === '#/home' && h.startsWith('#/product')) || (t === '#/orders' && h.startsWith('#/order/')));
+    const t = a.getAttribute('href');
+    a.classList.toggle('on', h === t || (t === '#/home' && h.startsWith('#/product')) || (t === '#/orders' && h.startsWith('#/order/')));
   });
 }
 function updateCartDot() {
@@ -179,15 +225,23 @@ async function route() {
   }
   $('#page').innerHTML = '<div class="empty"><div class="em">🧭</div><p>Halaman tidak ditemukan.</p><a class="btn" href="' + HOME[S.user.role] + '" style="margin-top:14px">Ke beranda</a></div>';
 }
+
 /* tampilan yang diperbarui otomatis (polling) tanpa berkedip */
-async function live(loader, draw, ms = 3000) {
+async function live(loader, draw, ms = 5000) {
   let last = '';
   const run = async first => {
-    const d = await loader(); const s = JSON.stringify(d);
-    if (first || s !== last) { last = s; if (!document.activeElement || !['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement.tagName)) draw(d); }
+    const d = await loader();
+    const s = JSON.stringify(d);
+    if (first || s !== last) {
+      last = s;
+      if (!document.activeElement || !['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement.tagName)) draw(d);
+    }
   };
-  await run(true); cur.poll = () => run(false).catch(() => { }); cur.pollMs = ms;
+  await run(true);
+  cur.poll = () => run(false).catch(() => { });
+  cur.pollMs = ms;
 }
+
 function startPolling() {
   if (window.__pollTimer) return;
   let lastNotif = Number(sessionStorage.getItem('ce_last_notif') || 0), first = true;
@@ -196,21 +250,26 @@ function startPolling() {
     cur.poll && cur.poll();
     try {
       const n = await api('/api/notifications');
-      const dot = $('#ndot'); if (dot) { dot.style.display = n.unread ? 'grid' : 'none'; dot.textContent = n.unread; }
+      const dot = $('#ndot');
+      if (dot) { dot.style.display = n.unread ? 'grid' : 'none'; dot.textContent = n.unread; }
       const fresh = n.items.filter(i => i.id > lastNotif);
       if (fresh.length) {
         if (!first) fresh.reverse().forEach(i => toast(i.body || '', '', i.title));
-        lastNotif = Math.max(...n.items.map(i => i.id)); sessionStorage.setItem('ce_last_notif', lastNotif);
-      } else if (first && n.items.length) { lastNotif = Math.max(lastNotif, n.items[0].id); sessionStorage.setItem('ce_last_notif', lastNotif); }
+        lastNotif = Math.max(...n.items.map(i => i.id));
+        sessionStorage.setItem('ce_last_notif', lastNotif);
+      } else if (first && n.items.length) {
+        lastNotif = Math.max(lastNotif, n.items[0].id);
+        sessionStorage.setItem('ce_last_notif', lastNotif);
+      }
       first = false;
       if (S.user.role === 'courier') checkOffer();
     } catch { }
-  }, 3000);
+  }, 5000);
 }
 
 /* ---------- auth ---------- */
 function renderAuth(signup) {
-  $('#app').innerHTML = `<div class="auth"><section class="auth-hero">${LOGO}<div><h1>Lapar di tengah kuliah?</h1><p>Pesan dari kantin kampus, makanan diantar langsung ke lantai dan ruang kelasmu.</p></div><span class="mute" style="opacity:.8">Campus Eats - demo kampus</span><div class="blob">🍱</div></section>
+  $('#app').innerHTML = `<div class="auth"><section class="auth-hero">${LOGO}<div><h1>Lapar di tengah kuliah?</h1><p>Pesan dari kantin kampus, makanan diantar langsung ke lantai dan ruang kelasmu.</p></div><span class="mute" style="opacity:.8">Campus Eats</span><div class="blob">🍱</div></section>
     <section class="auth-form"><div class="auth-card"><div style="margin-bottom:8px">${LOGO}</div>
       <div class="tabs"><button class="${signup ? '' : 'on'}" onclick="location.hash='#/login'">Masuk</button><button class="${signup ? 'on' : ''}" onclick="location.hash='#/signup'">Daftar</button></div>
       <form id="af" novalidate>${signup ? `
@@ -222,20 +281,31 @@ function renderAuth(signup) {
         <label class="f">Password<input name="password" type="password" autocomplete="${signup ? 'new-password' : 'current-password'}" required></label>
         <p class="err" id="aerr" style="color:var(--red);min-height:22px;font-size:.86rem"></p>
         <button class="btn block" id="abtn">${signup ? 'Buat akun' : 'Masuk'}</button></form>
-      ${signup ? '' : `<div class="demo"><b>Akun demo</b> - ketuk untuk mengisi otomatis:<br>
-        ${[['abyan', 'Abyan123!', 'Pemesan'], ['agus', 'Agus123!', 'Kurir 1'], ['seno', 'Seno123!', 'Kurir 2'], ['kantinlore', 'Lore123!', 'Kantin'], ['admin', 'Admin123!', 'Admin']].map(([u, p, l]) => `<button type="button" data-u="${u}" data-p="${p}">${l}</button>`).join('')}</div>`}
+      ${signup ? '' : `<div class="demo"><b>Akun demo</b> — ketuk username untuk mengisi (password mengikuti konfigurasi server):<br>
+        ${[['abyan', 'Pemesan'], ['agus', 'Kurir 1'], ['seno', 'Kurir 2'], ['kantinlore', 'Kantin'], ['admin', 'Admin']].map(([u, l]) => `<button type="button" data-u="${u}">${l} (@${u})</button>`).join('')}</div>`}
     </div></section></div>`;
   const f = $('#af');
   f.role && (f.role.onchange = () => { $('#sn').style.display = f.role.value === 'merchant' ? 'block' : 'none'; });
-  document.querySelectorAll('.demo button').forEach(b => b.onclick = () => { f.username.value = b.dataset.u; f.password.value = b.dataset.p; });
+  document.querySelectorAll('.demo button').forEach(b => b.onclick = () => { f.username.value = b.dataset.u; f.password.focus(); });
   f.onsubmit = async e => {
-    e.preventDefault(); const b = $('#abtn'); b.disabled = true; $('#aerr').textContent = '';
+    e.preventDefault();
+    const b = $('#abtn');
+    $('#aerr').textContent = '';
     const body = Object.fromEntries(new FormData(f));
-    if (!body.username?.trim() || !body.password) { $('#aerr').textContent = 'Username dan password wajib diisi'; b.disabled = false; return; }
-    try {
-      const r = await api(signup ? '/api/auth/register' : '/api/auth/login', 'POST', body);
-      S.user = r.user; $('#app').innerHTML = ''; sessionStorage.removeItem('ce_last_notif'); startPolling(); location.hash = HOME[S.user.role]; route();
-    } catch (er) { $('#aerr').textContent = er.message; b.disabled = false; }
+    if (!body.username?.trim() || !body.password) { $('#aerr').textContent = 'Username dan password wajib diisi'; return; }
+    await withBusy(b, async () => {
+      try {
+        const r = await api(signup ? '/api/auth/register' : '/api/auth/login', 'POST', body);
+        S.user = r.user;
+        $('#app').innerHTML = '';
+        sessionStorage.removeItem('ce_last_notif');
+        startPolling();
+        location.hash = HOME[S.user.role];
+        route();
+      } catch (er) {
+        $('#aerr').textContent = er.message;
+      }
+    });
   };
 }
 
@@ -247,7 +317,14 @@ A.notifPanel = async () => {
   const n = await api('/api/notifications');
   const d = document.createElement('div'); d.id = 'notifp'; d.className = 'card notifp';
   d.innerHTML = `<div class="row between" style="padding:8px 10px"><h3>Notifikasi</h3><button class="btn sm soft" onclick="A.readAll()">Tandai dibaca</button></div>` +
-    (n.items.length ? n.items.map(i => `<div class="nitem ${i.read ? '' : 'un'}" onclick="${i.link ? `location.hash='${esc(i.link)}'` : ''}"><b class="sm">${esc(i.title)}</b><div class="sm mute">${esc(i.body || '')}</div><div class="xs mute">${dt(i.created_at)}</div></div>`).join('') : '<div class="empty">Belum ada notifikasi</div>');
+    (n.items.length ? n.items.map(i => `<div class="nitem ${i.read ? '' : 'un'}" data-link="${esc(i.link || '')}"><b class="sm">${esc(i.title)}</b><div class="sm mute">${esc(i.body || '')}</div><div class="xs mute">${dt(i.created_at)}</div></div>`).join('') : '<div class="empty">Belum ada notifikasi</div>');
+  d.onclick = e => {
+    const item = e.target.closest('.nitem');
+    if (item && item.dataset.link && item.dataset.link.startsWith('#/')) {
+      location.hash = item.dataset.link;
+      d.remove();
+    }
+  };
   document.body.appendChild(d);
   setTimeout(() => document.addEventListener('click', function h(e) { if (!d.contains(e.target) && !e.target.closest('.iconbtn')) { d.remove(); document.removeEventListener('click', h); } }), 0);
 };
@@ -263,14 +340,14 @@ async function checkOffer() {
   modal(`<div class="center"><div class="radar" style="width:84px;height:84px;font-size:2rem">🛵</div><h2>Pesanan Baru!</h2>
     <p class="mute" style="margin:6px 0 14px">Ada pesanan baru! Apakah kamu ingin menerima pesanan ini?</p></div>
     <div class="card" style="background:#fff;box-shadow:none;border:1px solid var(--line)"><div class="sum"><div><span class="mute">Kantin</span><b>${esc(offer.merchant)}</b></div>
-    <div><span class="mute">Tujuan</span><b>Lantai ${offer.floor} - Ruang ${offer.room}</b></div><div><span class="mute">Jumlah item</span><b>${offer.items}</b></div>
+    <div><span class="mute">Tujuan</span><b>Lantai ${Number(offer.floor)} - Ruang ${Number(offer.room)}</b></div><div><span class="mute">Jumlah item</span><b>${Number(offer.items)}</b></div>
     <div><span class="mute">Estimasi ongkir</span><b style="color:var(--green-d)">${rp(offer.fee)}</b></div></div></div>
     <div class="track" style="margin:14px 0 4px"><i id="ot" style="width:100%"></i></div><p class="xs mute center" id="otxt">Sisa waktu ${left} detik</p>
     <div class="row" style="margin-top:12px"><button class="btn ghost block" id="o-no">Tolak</button><button class="btn block" id="o-ok">Terima Pesanan</button></div>`, { onclose: Object.assign(() => { }, { lock: true }) });
   const done = () => { clearInterval(offerTimer); closeModal(); };
   offerTimer = setInterval(() => { left--; const t = $('#ot'); if (!t) return clearInterval(offerTimer); t.style.width = Math.max(0, left / offer.total_seconds * 100) + '%'; $('#otxt').textContent = `Sisa waktu ${Math.max(left, 0)} detik`; if (left <= -1) { done(); offerShown = null; } }, 1000);
-  $('#o-ok').onclick = async () => { const r = await act(() => api(`/api/courier/offers/${offer.id}/accept`, 'POST'), 'Pesanan diterima. Menuju kantin!'); done(); offerShown = null; if (r) location.hash = '#/c/active'; };
-  $('#o-no').onclick = async () => { await act(() => api(`/api/courier/offers/${offer.id}/reject`, 'POST')); done(); offerShown = null; };
+  $('#o-ok').onclick = e => withBusy(e.currentTarget, async () => { const r = await act(() => api(`/api/courier/offers/${offer.id}/accept`, 'POST'), 'Pesanan diterima. Menuju kantin!'); done(); offerShown = null; if (r) location.hash = '#/c/active'; });
+  $('#o-no').onclick = e => withBusy(e.currentTarget, async () => { await act(() => api(`/api/courier/offers/${offer.id}/reject`, 'POST')); done(); offerShown = null; });
 }
 
 /* grafik: Chart.js bila ada, jika tidak batang sederhana */

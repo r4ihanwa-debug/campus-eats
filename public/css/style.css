@@ -214,3 +214,12 @@ textarea{resize:vertical;min-height:74px}
 }
 @media(max-width:420px){.menu{grid-template-columns:1fr}.art{height:150px}.search{max-width:none}}
 @media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+
+/* tambahan stage 2: indikator loading & komponen alert */
+.btn.is-loading{position:relative;pointer-events:none;opacity:.75}
+.btn.is-loading::after{content:'';width:14px;height:14px;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;display:inline-block;animation:spin .7s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+.alert{padding:11px 14px;border-radius:13px;font-size:.86rem;font-weight:600;border:1px solid var(--line);background:var(--paper);margin:8px 0}
+.alert.err{background:var(--red-l);border-color:rgba(210,71,59,.25);color:var(--red)}
+.alert.ok{background:var(--green-l);border-color:rgba(31,138,91,.25);color:var(--green-d)}
+.toast.warn{background:var(--orange)}

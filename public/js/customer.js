@@ -104,12 +104,17 @@ route$(/^#\/product\/(\d+)$/, CUST, async ({ params, query }) => {
   };
   const add = async (go, btn) => {
     if (!check()) return;
-    const r = await act(() => api('/api/cart/items', 'POST', payload()));
-    if (!r) return; S.cart = r; updateCartDot();
-    if (go) location.hash = '#/cart'; else { fly(btn); toast(`${p.name} masuk keranjang`, 'ok'); }
+    await withBusy(btn, async () => {
+      const r = await act(() => api('/api/cart/items', 'POST', payload()));
+      if (!r) return;
+      S.cart = r;
+      updateCartDot();
+      if (go) location.hash = '#/cart';
+      else { fly(btn); toast(`${p.name} masuk keranjang`, 'ok'); }
+    });
   };
-  if (editItem) $('#b-save').onclick = async () => { if (!check()) return; const b = payload(); const r = await act(() => api('/api/cart/items/' + editItem.id, 'PATCH', { qty, options: b.options, note: b.note }), 'Pesanan diperbarui'); if (r) location.hash = '#/cart'; };
-  else { $('#b-add').onclick = e => add(false, e.currentTarget); $('#b-buy').onclick = () => add(true); }
+  if (editItem) $('#b-save').onclick = e => withBusy(e.currentTarget, async () => { if (!check()) return; const b = payload(); const r = await act(() => api('/api/cart/items/' + editItem.id, 'PATCH', { qty, options: b.options, note: b.note }), 'Pesanan diperbarui'); if (r) location.hash = '#/cart'; });
+  else { $('#b-add').onclick = e => add(false, e.currentTarget); $('#b-buy').onclick = e => add(true, e.currentTarget); }
 });
 
 /* ---------- keranjang ---------- */
@@ -120,7 +125,7 @@ route$(/^#\/cart$/, CUST, async () => {
     if (!c.items.length) return page(`<h1>Keranjang</h1><div class="empty"><div class="em">🛒</div><p>Keranjangmu masih kosong.</p><a class="btn" href="#/home" style="margin-top:14px">Lihat menu</a></div>`);
     const fl = S.user.default_floor || 1, fee = fees.fees[fl], blocked = c.items.some(i => i.invalid) || !c.merchant?.open;
     page(`<h1>Keranjang</h1><div class="layout2" style="margin-top:16px"><div class="card"><div class="b" style="margin-bottom:4px">${esc(c.merchant.name)} ${c.merchant.open ? '' : '<span class="badge r">Tutup</span>'}</div>
-      ${c.items.map(i => `<div class="li"><div class="thumb ${EMOJI[i.product.image] ? i.product.image : 'default'} art" style="height:74px;font-size:2.2rem">${i.product.image?.startsWith('data:') ? `<img src="${i.product.image}" alt="">` : EMOJI[i.product.image] || '🍽️'}</div>
+      ${c.items.map(i => `<div class="li"><div class="thumb ${EMOJI[i.product.image] ? i.product.image : 'default'} art" style="height:74px;font-size:2.2rem">${safeDataImg(i.product.image) ? `<img src="${safeDataImg(i.product.image)}" alt="">` : EMOJI[i.product.image] || '🍽️'}</div>
         <div style="flex:1;min-width:0"><div class="row between"><b>${esc(i.product.name)}</b><b>${rp(i.total)}</b></div><div class="xs mute">${esc(i.text) || 'Tanpa variasi'}</div>${i.note ? `<div class="xs mute">Catatan: ${esc(i.note)}</div>` : ''}
         ${i.invalid ? `<div class="xs" style="color:var(--red)">${esc(i.invalid)}</div>` : ''}
         <div class="row between" style="margin-top:8px"><div class="qty"><button aria-label="Kurangi" onclick="A.cq(${i.id},${i.qty - 1})">−</button><b>${i.qty}</b><button aria-label="Tambah" onclick="A.cq(${i.id},${i.qty + 1})">+</button></div>
@@ -164,17 +169,16 @@ route$(/^#\/checkout$/, CUST, async () => {
   $('#fl').onclick = e => { const b = e.target.closest('button'); if (!b) return; st.floor = +b.dataset.f; document.querySelectorAll('#fl button').forEach(x => x.classList.toggle('on', x === b)); $('#e-floor').textContent = ''; dest(); st.voucher ? checkV() : sum(); };
   $('#room').onchange = e => { st.room = +e.target.value; $('#e-room').textContent = ''; dest(); };
   $('#va').onclick = () => { st.voucher = $('#vc').value.trim().toUpperCase(); S.voucher = st.voucher; checkV(); };
-  $('#pay').onclick = async () => {
+  $('#pay').onclick = e => withBusy(e.currentTarget, async () => {
     let ok = true;
     if (!st.floor) { $('#e-floor').textContent = '- wajib dipilih'; ok = false; }
     if (!st.room) { $('#e-room').textContent = '- wajib dipilih'; ok = false; }
     if ($('#rcp').value.trim().length < 2) { $('#e-rcp').textContent = '- isi nama penerima'; ok = false; }
     if (!ok) return toast('Lengkapi lantai, ruang, dan nama penerima', 'err');
-    $('#pay').disabled = true;
     const r = await act(() => api('/api/orders', 'POST', { floor: st.floor, room: st.room, recipient: $('#rcp').value.trim(), courier_note: $('#cn').value.trim(), voucher: st.discount ? st.voucher : '' }));
-    $('#pay').disabled = false; if (!r) return;
+    if (!r) return;
     S.voucher = ''; S.cart = { items: [], count: 0 }; updateCartDot(); qrisModal(r.order);
-  };
+  });
   dest(); sum(); if (st.voucher) checkV(true);
 });
 
@@ -198,12 +202,12 @@ function qrisModal(order) {
     <div class="row" style="margin-top:16px;flex-wrap:wrap"><button class="btn ghost block" id="q-no" style="flex:1">Batalkan Pembayaran</button><button class="btn block" id="q-ok" style="flex:1">Saya Sudah Bayar</button></div>`, { onclose: Object.assign(() => { clearInterval(t); location.hash = '#/order/' + order.id; }, {}) });
   const t = setInterval(() => { left--; const el = $('#cd'); if (!el) return clearInterval(t); if (left <= 0) { clearInterval(t); closeModal(); toast('Waktu pembayaran habis. Pesanan dibatalkan.', 'err'); location.hash = '#/orders'; return; } el.textContent = `Bayar dalam ${String(Math.floor(left / 60)).padStart(2, '0')}:${String(left % 60).padStart(2, '0')}`; }, 1000);
   $('#cd').textContent = `Bayar dalam ${String(Math.floor(left / 60)).padStart(2, '0')}:${String(left % 60).padStart(2, '0')}`;
-  $('#q-ok').onclick = async () => {
-    if (busy) return; busy = true; $('#q-ok').textContent = 'Memproses...';
+  $('#q-ok').onclick = e => withBusy(e.currentTarget, async () => {
+    if (busy) return; busy = true;
     const r = await act(() => api(`/api/orders/${order.id}/pay`, 'POST'));
     clearInterval(t); closeModal();
     if (r) { toast('Pembayaran berhasil (simulasi). Pesananmu diteruskan ke kantin & kurir.', 'ok'); location.hash = '#/order/' + order.id; }
-  };
+  });
   $('#q-no').onclick = async () => {
     if (!await confirmBox('Batalkan pembayaran?', 'Pesanan akan dibatalkan dan stok dikembalikan.', 'Ya, batalkan', true)) return qrisModal.again?.();
     clearInterval(t); await act(() => api(`/api/orders/${order.id}/cancel`, 'POST', { reason: 'Pembayaran dibatalkan' }), 'Pembayaran dibatalkan'); location.hash = '#/orders';
@@ -296,8 +300,8 @@ route$(/^#\/profile$/, null, async () => {
       <div class="card"><a class="btn ghost block" href="#/favorites" style="margin-bottom:8px">${ic('heart')}Menu favorit</a><a class="btn ghost block" href="#/help">${ic('help')}Bantuan</a></div>` : ''}
     <div class="card"><h3 style="margin-bottom:10px">Ganti password</h3><label class="f">Password lama<input id="cp" type="password" autocomplete="current-password"></label><label class="f">Password baru<input id="np" type="password" autocomplete="new-password"></label><button class="btn ghost" id="ppw">Ubah password</button></div>
     <button class="btn red block" onclick="A.logout()">${ic('logout')}Keluar</button></div></div>`);
-  $('#psave').onclick = async () => { const r = await act(() => api('/api/profile', 'PUT', { name: $('#pn').value, phone: $('#pph').value, default_floor: $('#pf')?.value, default_room: $('#pr')?.value }), 'Profil disimpan'); if (r) { S.user = r.user; shell(); route(); } };
-  $('#ppw').onclick = async () => { const r = await act(() => api('/api/profile/password', 'POST', { current: $('#cp').value, next: $('#np').value }), 'Password diubah'); if (r) { $('#cp').value = ''; $('#np').value = ''; } };
+  $('#psave').onclick = e => withBusy(e.currentTarget, async () => { const r = await act(() => api('/api/profile', 'PUT', { name: $('#pn').value, phone: $('#pph').value, default_floor: $('#pf')?.value, default_room: $('#pr')?.value }), 'Profil disimpan'); if (r) { S.user = r.user; shell(); route(); } });
+  $('#ppw').onclick = e => withBusy(e.currentTarget, async () => { const r = await act(() => api('/api/profile/password', 'POST', { current: $('#cp').value, next: $('#np').value }), 'Password diubah'); if (r) { $('#cp').value = ''; $('#np').value = ''; } });
 });
 
 /* ---------- bantuan ---------- */
@@ -311,5 +315,5 @@ route$(/^#\/help$/, null, async () => {
   ];
   page(`<h1>Bantuan</h1><div class="grid g2" style="margin-top:16px"><div class="card"><h3 style="margin-bottom:10px">FAQ & Panduan</h3>${faq.map(([q, a]) => `<details style="padding:10px 0;border-bottom:1px solid var(--line)"><summary class="b" style="cursor:pointer">${q}</summary><p class="sm mute" style="margin-top:6px">${a}</p></details>`).join('')}</div>
     <div class="card"><h3>Formulir pengaduan</h3><label class="f" style="margin-top:10px">Judul<input id="cs" maxlength="80"></label><label class="f">Pesan<textarea id="cm" maxlength="1000"></textarea></label><button class="btn" id="cgo">Kirim pengaduan</button></div></div>`);
-  $('#cgo').onclick = async () => { const r = await act(() => api('/api/complaints', 'POST', { subject: $('#cs').value, message: $('#cm').value }), 'Pengaduan terkirim ke admin'); if (r) { $('#cs').value = ''; $('#cm').value = ''; } };
+  $('#cgo').onclick = e => withBusy(e.currentTarget, async () => { const r = await act(() => api('/api/complaints', 'POST', { subject: $('#cs').value, message: $('#cm').value }), 'Pengaduan terkirim ke admin'); if (r) { $('#cs').value = ''; $('#cm').value = ''; } });
 });
